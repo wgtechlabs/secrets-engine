@@ -29,3 +29,5 @@ coverage/
 store.db
 .keyfile
 meta.json
+
+.vscode/*
