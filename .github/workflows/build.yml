@@ -6,6 +6,8 @@ on:
     branches:
       - main
       - dev
+  release:
+    types: [published]
 
 jobs:
   build:
@@ -26,7 +28,7 @@ jobs:
         with:
           bun-version: latest
 
-      - uses: wgtechlabs/package-build-flow-action@v1
+      - uses: wgtechlabs/package-build-flow-action@v1.2.0
         with:
           package-manager: "bun"
           npm-token: ${{ secrets.NPM_TOKEN }}
