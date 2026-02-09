@@ -1,6 +1,9 @@
 # @wgtechlabs/secrets-engine
 
-Bun-first TypeScript SDK for securely storing and managing secrets with zero-friction, machine-bound AES-256-GCM encryption.
+![GitHub Repo Banner](https://ghrb.waren.build/banner?header=secrets-engine+%F0%9F%A4%AB%F0%9F%9A%82&subheader=secrets+that+stay+secret&bg=016EEA&color=FFFFFF&headerfont=Google+Sans+Code&subheaderfont=Inter&watermarkpos=bottom-right)
+<!-- Created with GitHub Repo Banner by Waren Gonzaga: https://ghrb.waren.build -->
+
+Keep your secrets truly secret. With encrypted names and values, zero friction, and strict security by default, secrets‑engine gives developers defense‑in‑depth without the hassle. It’s a TypeScript SDK for secure secret storage, powered by machine‑bound AES‑256‑GCM and hardened SQLite.
 
 ## Features
 
