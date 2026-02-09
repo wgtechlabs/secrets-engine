@@ -1,6 +1,6 @@
 {
   "name": "@wgtechlabs/secrets-engine",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Bun-first TypeScript SDK for securely storing and managing secrets with zero-friction, machine-bound AES-256-GCM encryption.",
   "type": "module",
   "main": "dist/index.js",
@@ -47,6 +47,9 @@
   },
   "engines": {
     "bun": ">=1.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
