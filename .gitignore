@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# AI docs
+ai_docs/*
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bun
+bun.lockb
+
+# Coverage
+coverage/
+
+# IDE (keep .vscode/settings.json)
+.idea/
+
+# Secrets engine store (never commit user stores)
+.secrets-engine/
+store.db
+.keyfile
+meta.json

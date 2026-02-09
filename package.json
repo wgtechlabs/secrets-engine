@@ -1,0 +1,56 @@
+{
+  "name": "@wgtechlabs/secrets-engine",
+  "version": "1.0.0",
+  "description": "Bun-first TypeScript SDK for securely storing and managing secrets with zero-friction, machine-bound AES-256-GCM encryption.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "build:types": "bun x tsc --emitDeclarationOnly --declaration --outDir dist",
+    "prepublishOnly": "bun run build && bun run build:types",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "lint": "bunx biome check ./src ./tests",
+    "lint:fix": "bunx biome check --write ./src ./tests",
+    "format": "bunx biome format --write ./src ./tests",
+    "typecheck": "bun x tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "secrets",
+    "encryption",
+    "aes-256-gcm",
+    "vault",
+    "keystore",
+    "bun",
+    "typescript",
+    "machine-bound",
+    "credential-management"
+  ],
+  "author": "WG Tech Labs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wgtechlabs/secrets-engine.git"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.0"
+  }
+}
