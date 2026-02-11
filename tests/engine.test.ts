@@ -181,7 +181,7 @@ describe("getOrThrow", () => {
   test("throws KeyNotFoundError for missing key", async () => {
     const engine = await SecretsEngine.open({ path: testDir });
 
-    expect(engine.getOrThrow("missing")).rejects.toThrow(KeyNotFoundError);
+    await expect(engine.getOrThrow("missing")).rejects.toThrow(KeyNotFoundError);
     await engine.close();
   });
 });
