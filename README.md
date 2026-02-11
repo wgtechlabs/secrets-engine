@@ -44,7 +44,7 @@ await secrets.keys("openai.*"); // ["openai.apiKey"]
 await secrets.delete("openai.apiKey");
 
 // Clean up
-secrets.close();
+await secrets.close();
 ```
 
 ## Storage Location
@@ -101,7 +101,11 @@ List all key names, optionally filtered by glob pattern (e.g., `"openai.*"`).
 
 ### `secrets.close()`
 
-Close the database connection. Instance cannot be reused.
+Close the database connection and release resources. **This method is async and must be awaited.**
+
+Returns a `Promise<void>` that resolves when the database is closed and integrity is finalized.
+
+**Breaking Change (v2.0.0):** This method is now async. Update your code to `await secrets.close()`.
 
 ### `secrets.size`
 
