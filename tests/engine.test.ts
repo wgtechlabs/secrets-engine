@@ -4,6 +4,7 @@
  * These tests use isolated temporary directories to avoid interference.
  */
 
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,6 +20,16 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(testDir, { recursive: true, force: true }).catch(() => {});
 });
+
+/**
+ * Helper function to force a WAL checkpoint using a separate SQLite connection.
+ * Used in regression tests to deterministically trigger checkpoint-related race conditions.
+ */
+function forceCheckpoint(dbPath: string): void {
+  const db = new Database(dbPath);
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  db.close();
+}
 
 describe("SecretsEngine.open", () => {
   test("creates a new store with no errors", async () => {
@@ -61,7 +72,7 @@ describe("SecretsEngine.open", () => {
     // Regression test for WAL checkpoint race condition
     // Deterministically forces the condition by manually checkpointing the WAL
     // between close and reopen to ensure the test reliably validates the fix
-    const { Database } = await import("bun:sqlite");
+    const dbPath = join(testDir, "store.db");
 
     const engine1 = await SecretsEngine.open({ path: testDir });
     await engine1.set("test.key", "test-value");
@@ -69,10 +80,7 @@ describe("SecretsEngine.open", () => {
 
     // Force a checkpoint using a separate connection to deterministically
     // trigger the race condition that this fix addresses
-    const dbPath = join(testDir, "store.db");
-    const checkpointDb = new Database(dbPath);
-    checkpointDb.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-    checkpointDb.close();
+    forceCheckpoint(dbPath);
 
     // This should not throw IntegrityError
     const engine2 = await SecretsEngine.open({ path: testDir });
@@ -82,9 +90,7 @@ describe("SecretsEngine.open", () => {
     await engine2.set("test.key", "updated-value");
     await engine2.close();
 
-    const checkpointDb2 = new Database(dbPath);
-    checkpointDb2.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-    checkpointDb2.close();
+    forceCheckpoint(dbPath);
 
     // This should also not throw IntegrityError
     const engine3 = await SecretsEngine.open({ path: testDir });
