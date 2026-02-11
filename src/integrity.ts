@@ -19,7 +19,16 @@ import { CONSTANTS } from "./types.ts";
  * integrity_hmac = HMAC-SHA256(master_key, SHA256(store.db))
  * ```
  */
-export async function computeIntegrityHmac(masterKey: Buffer, dbFilePath: string): Promise<string> {
+export async function computeIntegrityHmac(
+  masterKey: Buffer,
+  dbFilePath: string,
+  checkpointFn?: () => void,
+): Promise<string> {
+  // Checkpoint WAL to ensure all data is flushed to the main database file
+  if (checkpointFn) {
+    checkpointFn();
+  }
+
   const dbBytes = Buffer.from(await readFile(dbFilePath));
   const dbHash = sha256(dbBytes);
   return hmac(masterKey, dbHash);
@@ -33,6 +42,7 @@ export async function verifyIntegrity(
   masterKey: Buffer,
   dbFilePath: string,
   dirPath: string,
+  checkpointFn?: () => void,
 ): Promise<StoreMeta> {
   const metaRaw = await readMetaFile(dirPath);
 
@@ -53,7 +63,7 @@ export async function verifyIntegrity(
     );
   }
 
-  const computedHmac = await computeIntegrityHmac(masterKey, dbFilePath);
+  const computedHmac = await computeIntegrityHmac(masterKey, dbFilePath, checkpointFn);
 
   if (computedHmac !== meta.integrity) {
     throw new IntegrityError();
@@ -70,8 +80,9 @@ export async function updateIntegrity(
   dbFilePath: string,
   dirPath: string,
   salt: string,
+  checkpointFn?: () => void,
 ): Promise<void> {
-  const integrity = await computeIntegrityHmac(masterKey, dbFilePath);
+  const integrity = await computeIntegrityHmac(masterKey, dbFilePath, checkpointFn);
 
   const meta: StoreMeta = {
     version: CONSTANTS.STORE_VERSION,

@@ -56,6 +56,29 @@ describe("SecretsEngine.open", () => {
     expect(engine2.size).toBe(3);
     engine2.close();
   });
+
+  test("integrity verification succeeds after WAL checkpoint on reopen", async () => {
+    // Regression test for WAL checkpoint race condition
+    // Write data, close, and reopen multiple times to ensure integrity verification
+    // works correctly regardless of WAL checkpoint timing
+
+    const engine1 = await SecretsEngine.open({ path: testDir });
+    await engine1.set("test.key", "test-value");
+    engine1.close();
+
+    // This should not throw IntegrityError
+    const engine2 = await SecretsEngine.open({ path: testDir });
+    expect(await engine2.get("test.key")).toBe("test-value");
+
+    // Update the value and reopen again
+    await engine2.set("test.key", "updated-value");
+    engine2.close();
+
+    // This should also not throw IntegrityError
+    const engine3 = await SecretsEngine.open({ path: testDir });
+    expect(await engine3.get("test.key")).toBe("updated-value");
+    engine3.close();
+  });
 });
 
 describe("set / get", () => {

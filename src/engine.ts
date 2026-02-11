@@ -103,7 +103,7 @@ export class SecretsEngine {
 
     // 6. Verify integrity (skip for brand-new stores)
     if (!isNewStore) {
-      await verifyIntegrity(masterKey, store.filePath, dirPath);
+      await verifyIntegrity(masterKey, store.filePath, dirPath, () => store.checkpoint());
     }
 
     // 7. Build the instance
@@ -114,7 +114,7 @@ export class SecretsEngine {
 
     // 9. Write initial integrity HMAC for new stores
     if (isNewStore) {
-      await updateIntegrity(masterKey, store.filePath, dirPath, salt);
+      await updateIntegrity(masterKey, store.filePath, dirPath, salt, () => store.checkpoint());
     }
 
     return engine;
@@ -184,7 +184,9 @@ export class SecretsEngine {
     this.keyIndex.set(keyHash, key);
 
     // Update integrity HMAC
-    await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt);
+    await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt, () =>
+      this.store.checkpoint(),
+    );
   }
 
   /**
@@ -209,7 +211,9 @@ export class SecretsEngine {
 
     if (deleted) {
       this.keyIndex.delete(keyHash);
-      await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt);
+      await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt, () =>
+        this.store.checkpoint(),
+      );
     }
 
     return deleted;
