@@ -101,23 +101,29 @@ export class SecretsEngine {
     // 5. Open SQLite database
     const store = SecretStore.open(dirPath);
 
-    // 6. Verify integrity (skip for brand-new stores)
-    if (!isNewStore) {
-      await verifyIntegrity(masterKey, store.filePath, dirPath, () => store.checkpoint());
+    try {
+      // 6. Verify integrity (skip for brand-new stores)
+      if (!isNewStore) {
+        await verifyIntegrity(masterKey, store.filePath, dirPath, () => store.checkpoint());
+      }
+
+      // 7. Build the instance
+      const engine = new SecretsEngine(masterKey, store, dirPath, salt);
+
+      // 8. Build in-memory key index
+      engine.buildKeyIndex();
+
+      // 9. Write initial integrity HMAC for new stores
+      if (isNewStore) {
+        await updateIntegrity(masterKey, store.filePath, dirPath, salt, () => store.checkpoint());
+      }
+
+      return engine;
+    } catch (error) {
+      // Cleanup: close the store if initialization fails
+      store.close();
+      throw error;
     }
-
-    // 7. Build the instance
-    const engine = new SecretsEngine(masterKey, store, dirPath, salt);
-
-    // 8. Build in-memory key index
-    engine.buildKeyIndex();
-
-    // 9. Write initial integrity HMAC for new stores
-    if (isNewStore) {
-      await updateIntegrity(masterKey, store.filePath, dirPath, salt, () => store.checkpoint());
-    }
-
-    return engine;
   }
 
   // -----------------------------------------------------------------------
@@ -183,10 +189,8 @@ export class SecretsEngine {
     // Update in-memory key index
     this.keyIndex.set(keyHash, key);
 
-    // Update integrity HMAC
-    await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt, () =>
-      this.store.checkpoint(),
-    );
+    // Update integrity HMAC (without checkpoint to avoid write amplification)
+    await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt);
   }
 
   /**
@@ -211,9 +215,8 @@ export class SecretsEngine {
 
     if (deleted) {
       this.keyIndex.delete(keyHash);
-      await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt, () =>
-        this.store.checkpoint(),
-      );
+      // Update integrity HMAC (without checkpoint to avoid write amplification)
+      await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt);
     }
 
     return deleted;
@@ -261,10 +264,17 @@ export class SecretsEngine {
 
   /**
    * Close the database connection and release resources.
+   * Checkpoints the WAL and updates integrity HMAC before closing.
    * The instance cannot be used after calling `close()`.
    */
-  close(): void {
+  async close(): Promise<void> {
     if (!this.closed) {
+      // Checkpoint WAL to ensure all data is flushed to the main database file
+      this.store.checkpoint();
+
+      // Update integrity HMAC to reflect the final checkpointed state
+      await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt);
+
       this.store.close();
       this.keyIndex.clear();
       this.closed = true;

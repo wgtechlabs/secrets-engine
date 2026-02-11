@@ -26,7 +26,12 @@ export async function computeIntegrityHmac(
 ): Promise<string> {
   // Checkpoint WAL to ensure all data is flushed to the main database file
   if (checkpointFn) {
-    checkpointFn();
+    try {
+      checkpointFn();
+    } catch (err) {
+      const originalMessage = err instanceof Error ? err.message : String(err);
+      throw new IntegrityError(`Integrity checkpoint failed: ${originalMessage}`);
+    }
   }
 
   const dbBytes = Buffer.from(await readFile(dbFilePath));

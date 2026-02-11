@@ -44,7 +44,7 @@ await secrets.keys("openai.*"); // ["openai.apiKey"]
 await secrets.delete("openai.apiKey");
 
 // Clean up
-secrets.close();
+await secrets.close();
 ```
 
 ## Storage Location
