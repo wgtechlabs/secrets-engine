@@ -10,6 +10,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KeyNotFoundError, SecretsEngine } from "../src/index.ts";
+import { CONSTANTS } from "../src/types.ts";
 
 let testDir: string;
 
@@ -27,8 +28,11 @@ afterEach(async () => {
  */
 function forceCheckpoint(dbPath: string): void {
   const db = new Database(dbPath);
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-  db.close();
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  } finally {
+    db.close();
+  }
 }
 
 describe("SecretsEngine.open", () => {
@@ -72,7 +76,7 @@ describe("SecretsEngine.open", () => {
     // Regression test for WAL checkpoint race condition
     // Deterministically forces the condition by manually checkpointing the WAL
     // between close and reopen to ensure the test reliably validates the fix
-    const dbPath = join(testDir, "store.db");
+    const dbPath = join(testDir, CONSTANTS.DB_NAME);
 
     const engine1 = await SecretsEngine.open({ path: testDir });
     await engine1.set("test.key", "test-value");
