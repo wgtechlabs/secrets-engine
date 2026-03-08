@@ -31,3 +31,4 @@ store.db
 meta.json
 
 .vscode/*
+.contributerc.json
