@@ -30,13 +30,15 @@ describe("SecretsEngineError hierarchy", () => {
     const err = new IntegrityError();
 
     expect(err.code).toBe("INTEGRITY_ERROR");
+    expect(err.subcode).toBe("INTEGRITY_MISMATCH");
     expect(err.message).toContain("integrity check failed");
   });
 
   test("IntegrityError accepts custom message", () => {
-    const err = new IntegrityError("custom");
+    const err = new IntegrityError("custom", "METADATA_MISSING");
 
     expect(err.message).toBe("custom");
+    expect(err.subcode).toBe("METADATA_MISSING");
   });
 
   test("KeyNotFoundError includes key name in message", () => {

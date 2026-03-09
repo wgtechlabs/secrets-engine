@@ -11,6 +11,7 @@ Keep your secrets truly secret. With encrypted names and values, zero friction, 
 - **Maximum privacy** — Both key names and values are encrypted. No metadata leakage.
 - **Machine-bound** — Encryption keys are derived from machine identity + random keyfile via scrypt.
 - **Defense in depth** — Filesystem permission verification, HMAC integrity checks, per-entry unique IVs.
+- **Actionable recovery** — Static reset/destroy APIs recover unreadable stores without a successful `open()`.
 - **Bun-native** — Built on `bun:sqlite` and Node crypto. Zero external runtime dependencies.
 
 ## Installation
@@ -71,6 +72,31 @@ const secrets = await SecretsEngine.open({ path: "/opt/myapp/secrets" });
 
 Open or create a secrets store. Returns a `Promise<SecretsEngine>`.
 
+### `SecretsEngine.destroyAtPath(options?)`
+
+Destroy a store at a path without requiring a successful `open()` first. For safety, this only deletes directories that look like a secrets-engine store.
+
+Parameters:
+
+- `options` is optional and uses the same shape as `SecretsEngine.open(options?)`
+- `path` can point to an explicit storage directory and takes precedence when provided
+- `location` can be used instead of `path` to resolve a preset storage location such as `"xdg"`
+- if `options` is omitted, path resolution follows the same defaults as `open()` described in [Storage Location](#storage-location)
+- there is no extra `force` flag; deletion is recursive only inside the validated store directory
+
+### `SecretsEngine.resetAtPath(options?)`
+
+Remove a store's contents and immediately recreate a fresh empty store at the same path. For safety, this only deletes directories that look like a secrets-engine store.
+
+Parameters:
+
+- `options` is optional and includes the same base fields as `SecretsEngine.open(options?)`
+- `path` can point to an explicit storage directory and takes precedence when provided
+- `location` can be used instead of `path` to resolve a preset storage location such as `"xdg"`
+- `preserveDirectory` defaults to `true`, which removes the store contents but keeps the storage directory so the store can be recreated in place
+- if `options` is omitted, path resolution follows the same defaults as `open()` described in [Storage Location](#storage-location)
+- there is no extra `force` flag; reset removes store contents recursively only inside the validated store directory before reopening it
+
 ### `secrets.get(key)`
 
 Retrieve a decrypted secret value. Returns `string | null`.
@@ -124,19 +150,36 @@ Absolute path to the storage directory.
 | Key name privacy | Both names and values encrypted; HMAC-SHA256 index |
 | File permissions | Strict verification on open (700/600/400) |
 | Integrity | HMAC-SHA256 of database contents in meta.json |
-| Machine binding | Hostname + MAC + username + random keyfile |
+| Machine binding | Hostname + sorted MAC set + username + random keyfile |
+
+Machine binding compatibility guarantees:
+
+- new stores use a canonical sorted MAC-set binding, so adapter ordering changes do not change the derived identity
+- older stores remain compatible through legacy single-MAC fallback candidates when the original MAC is still present
+- stores that already include `machineBinding` metadata surface `MACHINE_IDENTITY_CHANGED` when the canonical identity truly changes
+- legacy stores without `machineBinding` metadata still open normally, but incompatible identity changes fall back to the generic `INTEGRITY_MISMATCH` subcode
 
 ## Error Types
 
 | Error | When |
 |-------|------|
 | `SecurityError` | File permissions too permissive |
-| `IntegrityError` | Database HMAC verification fails |
+| `IntegrityError` | Metadata, machine binding, or database HMAC verification fails |
 | `KeyNotFoundError` | `getOrThrow()` for missing key |
 | `DecryptionError` | Corrupted entry or wrong key |
 | `InitializationError` | Cannot create store directory |
 
 All errors extend `SecretsEngineError` with a `.code` property.
+
+`IntegrityError` keeps `code === "INTEGRITY_ERROR"` and adds a machine-readable `.subcode` such as:
+
+- `METADATA_MISSING`
+- `METADATA_CORRUPTED`
+- `DATABASE_MISSING`
+- `UNSUPPORTED_VERSION`
+- `INTEGRITY_MISMATCH`
+- `MACHINE_IDENTITY_CHANGED`
+- `CHECKPOINT_FAILED`
 
 ## Development
 

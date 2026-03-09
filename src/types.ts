@@ -13,6 +13,15 @@ export interface OpenOptions {
   readonly location?: StorageLocation;
 }
 
+/** Options for {@link SecretsEngine.resetAtPath}. */
+export interface ResetOptions extends OpenOptions {
+  /**
+   * Preserve the storage directory itself while removing its contents.
+   * Defaults to `true` so reset can immediately reinitialize the same path.
+   */
+  readonly preserveDirectory?: boolean;
+}
+
 /** Internal representation of an encrypted secret row. */
 export interface EncryptedEntry {
   readonly key_hash: string;
@@ -24,10 +33,17 @@ export interface EncryptedEntry {
 }
 
 /** Metadata stored in meta.json. */
+export interface MachineBindingMeta {
+  readonly strategy: string;
+  readonly fingerprint: string;
+}
+
+/** Metadata stored in meta.json. */
 export interface StoreMeta {
   readonly version: string;
   readonly salt: string;
   readonly integrity: string;
+  readonly machineBinding?: MachineBindingMeta;
 }
 
 /** Constants used across the SDK. */
@@ -58,4 +74,6 @@ export const CONSTANTS = {
   DB_NAME: "store.db",
   /** Metadata filename. */
   META_NAME: "meta.json",
+  /** Machine identity strategy stored in metadata for actionable recovery errors. */
+  MACHINE_BINDING_STRATEGY: "mac-set-v1",
 } as const;

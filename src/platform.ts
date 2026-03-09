@@ -7,6 +7,7 @@
 import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname, networkInterfaces, userInfo } from "node:os";
 import { join } from "node:path";
+import { sha256 } from "./crypto.ts";
 import { InitializationError, SecurityError } from "./errors.ts";
 import { CONSTANTS } from "./types.ts";
 import type { StorageLocation } from "./types.ts";
@@ -131,33 +132,107 @@ function formatOctal(mode: number): string {
  * Collect machine-specific identity components.
  * Combined with the random keyfile, these form the scrypt password.
  *
- * Components: hostname + primary MAC address + OS username
+ * Components: hostname + stable MAC set + OS username
  */
 export function getMachineIdentity(): string {
-  const host = hostname();
-  const mac = getPrimaryMac();
-  const user = userInfo().username;
-
-  return `${host}:${mac}:${user}`;
+  return getMachineIdentityProfile().canonical;
 }
 
 /**
- * Retrieve the first non-internal, non-loopback MAC address.
- * Falls back to a deterministic placeholder if no NIC is found.
+ * Machine identity data used for key derivation and actionable recovery errors.
  */
-function getPrimaryMac(): string {
-  const interfaces = networkInterfaces();
+export interface MachineIdentityProfile {
+  readonly strategy: typeof CONSTANTS.MACHINE_BINDING_STRATEGY;
+  readonly canonical: string;
+  readonly candidates: readonly string[];
+  readonly fingerprint: string;
+  readonly macs: readonly string[];
+}
 
+interface MachineIdentityOverrides {
+  readonly host?: string;
+  readonly interfaces?: ReturnType<typeof networkInterfaces>;
+  readonly username?: string;
+}
+
+/**
+ * Build a deterministic machine identity profile.
+ *
+ * - `canonical` is stable across adapter ordering changes because it uses the
+ *   full sorted MAC set.
+ * - `candidates` includes legacy single-MAC identities so older stores can
+ *   still open even if Windows adapter ordering changes.
+ */
+export function getMachineIdentityProfile(
+  overrides: MachineIdentityOverrides = {},
+): MachineIdentityProfile {
+  const host = overrides.host ?? hostname();
+  const username = overrides.username ?? userInfo().username;
+  const interfaces = overrides.interfaces ?? networkInterfaces();
+  const macs = collectMacAddresses(interfaces);
+  const canonicalMacs = macs.length > 0 ? macs.join(",") : "no-mac-available";
+  const canonical = formatMachineIdentity(host, canonicalMacs, username);
+  const candidates = new Set<string>([canonical]);
+
+  for (const mac of macs) {
+    candidates.add(formatMachineIdentity(host, mac, username));
+  }
+
+  candidates.add(formatMachineIdentity(host, getLegacyPrimaryMac(interfaces), username));
+
+  return {
+    strategy: CONSTANTS.MACHINE_BINDING_STRATEGY,
+    canonical,
+    candidates: Array.from(candidates),
+    fingerprint: sha256(Buffer.from(canonical, "utf-8")).toString("hex"),
+    macs,
+  };
+}
+
+function collectMacAddresses(interfaces: ReturnType<typeof networkInterfaces>): string[] {
+  const macs = new Set<string>();
+
+  for (const [, entries] of Object.entries(interfaces).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (!entries) continue;
+
+    for (const entry of entries) {
+      const normalizedMac = normalizeMac(entry.mac);
+      if (!entry.internal && normalizedMac !== null) {
+        macs.add(normalizedMac);
+      }
+    }
+  }
+
+  return Array.from(macs).sort();
+}
+
+function getLegacyPrimaryMac(interfaces: ReturnType<typeof networkInterfaces>): string {
   for (const entries of Object.values(interfaces)) {
     if (!entries) continue;
+
     for (const entry of entries) {
-      if (!entry.internal && entry.mac && entry.mac !== "00:00:00:00:00:00") {
-        return entry.mac;
+      const normalizedMac = normalizeMac(entry.mac);
+      if (!entry.internal && normalizedMac !== null) {
+        return normalizedMac;
       }
     }
   }
 
   return "no-mac-available";
+}
+
+function formatMachineIdentity(host: string, macSegment: string, username: string): string {
+  return `${host}:${macSegment}:${username}`;
+}
+
+function normalizeMac(mac: string | undefined): string | null {
+  if (!mac || mac === "00:00:00:00:00:00") {
+    return null;
+  }
+
+  return mac.toLowerCase();
 }
 
 // ---------------------------------------------------------------------------

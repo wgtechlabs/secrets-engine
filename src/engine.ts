@@ -8,21 +8,21 @@
  * All public methods are async to allow for future storage adapter extensibility.
  */
 
-import { readdir, rm, unlink } from "node:fs/promises";
+import { access, readdir, rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { decrypt, deriveMasterKey, encrypt, generateSalt, hmac } from "./crypto.ts";
-import { DecryptionError, KeyNotFoundError } from "./errors.ts";
+import { DecryptionError, InitializationError, IntegrityError, KeyNotFoundError } from "./errors.ts";
 import { filterKeys } from "./glob.ts";
-import { updateIntegrity, verifyIntegrity } from "./integrity.ts";
+import { readStoreMeta, updateIntegrity, verifyIntegrity } from "./integrity.ts";
 import {
   ensureDirectory,
   ensureKeyfile,
-  getMachineIdentity,
-  readMetaFile,
+  getMachineIdentityProfile,
   resolveStoragePath,
 } from "./platform.ts";
 import { SecretStore } from "./store.ts";
-import type { OpenOptions } from "./types.ts";
+import { CONSTANTS } from "./types.ts";
+import type { MachineBindingMeta, OpenOptions, ResetOptions, StoreMeta } from "./types.ts";
 
 /**
  * Secure, machine-bound secrets manager.
@@ -47,6 +47,9 @@ export class SecretsEngine {
   /** Salt used for key derivation (hex-encoded). */
   private readonly salt: string;
 
+  /** Machine identity metadata stored alongside integrity information. */
+  private readonly machineBinding?: MachineBindingMeta;
+
   /** In-memory index: key_hash → plaintext key name. */
   private readonly keyIndex: Map<string, string> = new Map();
 
@@ -57,11 +60,18 @@ export class SecretsEngine {
   // Private constructor — use `SecretsEngine.open()` instead
   // -----------------------------------------------------------------------
 
-  private constructor(masterKey: Buffer, store: SecretStore, dirPath: string, salt: string) {
+  private constructor(
+    masterKey: Buffer,
+    store: SecretStore,
+    dirPath: string,
+    salt: string,
+    machineBinding?: MachineBindingMeta,
+  ) {
     this.masterKey = masterKey;
     this.store = store;
     this.dirPath = dirPath;
     this.salt = salt;
+    this.machineBinding = machineBinding;
   }
 
   // -----------------------------------------------------------------------
@@ -91,43 +101,76 @@ export class SecretsEngine {
     // 2. Read or create the random keyfile
     const keyfile = await ensureKeyfile(dirPath);
 
-    // 3. Resolve salt (existing store or fresh)
-    const { salt, isNewStore } = await resolveSalt(dirPath);
+    // 3. Resolve metadata state (existing store or fresh)
+    const storeState = await resolveStoreState(dirPath);
+    const machineIdentity = getMachineIdentityProfile();
 
-    // 4. Derive master key via scrypt
-    const machineId = getMachineIdentity();
-    const masterKey = deriveMasterKey(machineId, keyfile, Buffer.from(salt, "hex"));
-
-    // 5. Open SQLite database
+    // 4. Open SQLite database
     const store = SecretStore.open(dirPath);
 
     try {
-      // 6. Verify integrity (skip for brand-new stores)
-      if (!isNewStore) {
-        await verifyIntegrity(masterKey, store.filePath, dirPath, () => store.checkpoint());
-      }
+      const { masterKey, machineBinding } = storeState.isNewStore
+        ? {
+            masterKey: deriveMasterKey(
+              machineIdentity.canonical,
+              keyfile,
+              Buffer.from(storeState.salt, "hex"),
+            ),
+            machineBinding: createMachineBinding(machineIdentity),
+          }
+        : await resolveExistingStoreMasterKey(
+            keyfile,
+            storeState.meta,
+            machineIdentity,
+            store.filePath,
+            () => store.checkpoint(),
+          );
 
-      // 7. Build the instance
-      const engine = new SecretsEngine(masterKey, store, dirPath, salt);
+      // 5. Build the instance
+      const engine = new SecretsEngine(masterKey, store, dirPath, storeState.salt, machineBinding);
 
-      // 8. Build in-memory key index
+      // 6. Build in-memory key index
       engine.buildKeyIndex();
 
-      // 9. Write initial integrity HMAC for new stores
-      if (isNewStore) {
-        await updateIntegrity(masterKey, store.filePath, dirPath, salt, () => store.checkpoint());
+      // 7. Write initial integrity HMAC for new stores
+      if (storeState.isNewStore) {
+        await updateIntegrity(masterKey, store.filePath, dirPath, storeState.salt, {
+          checkpoint: () => store.checkpoint(),
+          machineBinding,
+        });
       }
 
       return engine;
     } catch (error) {
-      // Cleanup: close the store if initialization fails
-      try {
-        store.close();
-      } catch {
-        // Intentionally ignore errors during close to preserve original error
-      }
+      await cleanupFailedOpen(store);
       throw error;
     }
+  }
+
+  /**
+   * Destroy a store at a path without requiring a successful `open()` first.
+   * Refuses to delete directories that do not look like a secrets-engine store.
+   */
+  static async destroyAtPath(options?: OpenOptions): Promise<void> {
+    const dirPath = resolveStoragePath(options);
+    await assertRecoveryTarget(dirPath, "destroy");
+    await releaseDetachedStore(dirPath);
+    await removeDirectoryContents(dirPath);
+  }
+
+  /**
+   * Reset a store at a path, then immediately reopen it as an empty store.
+   * Refuses to delete directories that do not look like a secrets-engine store.
+   */
+  static async resetAtPath(options?: ResetOptions): Promise<SecretsEngine> {
+    const dirPath = resolveStoragePath(options);
+    const preserveDirectory = options?.preserveDirectory ?? true;
+
+    await assertRecoveryTarget(dirPath, "reset");
+    await releaseDetachedStore(dirPath);
+    await removeDirectoryContents(dirPath, preserveDirectory);
+
+    return await SecretsEngine.open(options);
   }
 
   // -----------------------------------------------------------------------
@@ -194,9 +237,10 @@ export class SecretsEngine {
     this.keyIndex.set(keyHash, key);
 
     // Update integrity HMAC, checkpointing first to keep store.db and meta.json in sync
-    await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt, () =>
-      this.store.checkpoint(),
-    );
+    await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt, {
+      checkpoint: () => this.store.checkpoint(),
+      machineBinding: this.machineBinding,
+    });
   }
 
   /**
@@ -221,10 +265,10 @@ export class SecretsEngine {
 
     if (deleted) {
       this.keyIndex.delete(keyHash);
-      // Update integrity HMAC, checkpointing first to keep store.db and meta.json in sync
-      await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt, () =>
-        this.store.checkpoint(),
-      );
+      await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt, {
+        checkpoint: () => this.store.checkpoint(),
+        machineBinding: this.machineBinding,
+      });
     }
 
     return deleted;
@@ -257,16 +301,10 @@ export class SecretsEngine {
   async destroy(): Promise<void> {
     this.ensureOpen();
 
-    // Checkpoint WAL and switch to DELETE mode to release WAL/SHM file handles
-    this.store.checkpoint();
-    this.store.close();
+    await closeStoreForCleanup(this.store);
     this.keyIndex.clear();
     this.closed = true;
 
-    // Allow OS to release file handles
-    await new Promise((resolve) => setTimeout(resolve, 150));
-
-    // Remove individual files first (more reliable on Windows than recursive rm)
     await removeDirectoryContents(this.dirPath);
   }
 
@@ -278,13 +316,11 @@ export class SecretsEngine {
   async close(): Promise<void> {
     if (!this.closed) {
       try {
-        // Checkpoint WAL to ensure all data is flushed to the main database file
         this.store.checkpoint();
-
-        // Update integrity HMAC to reflect the final checkpointed state
-        await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt);
+        await updateIntegrity(this.masterKey, this.store.filePath, this.dirPath, this.salt, {
+          machineBinding: this.machineBinding,
+        });
       } finally {
-        // Always close the store and clear state, even if integrity update fails
         this.store.close();
         this.keyIndex.clear();
         this.closed = true;
@@ -329,7 +365,6 @@ export class SecretsEngine {
         this.keyIndex.set(entry.key_hash, keyName);
       } catch (error) {
         if (error instanceof DecryptionError) {
-          // Log but don't throw — a single corrupted entry shouldn't prevent opening
           console.warn(
             `[secrets-engine] Skipping corrupted entry: ${entry.key_hash.slice(0, 16)}…`,
           );
@@ -362,33 +397,157 @@ export class SecretsEngine {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve the salt — read from existing `meta.json` or generate a new one.
- */
-async function resolveSalt(dirPath: string): Promise<{ salt: string; isNewStore: boolean }> {
-  const metaRaw = await readMetaFile(dirPath);
+type StoreState =
+  | { readonly isNewStore: true; readonly salt: string }
+  | { readonly isNewStore: false; readonly meta: StoreMeta; readonly salt: string };
 
-  if (metaRaw) {
+async function resolveStoreState(dirPath: string): Promise<StoreState> {
+  const dbPath = join(dirPath, CONSTANTS.DB_NAME);
+  const [meta, dbExists] = await Promise.all([readStoreMeta(dirPath), pathExists(dbPath)]);
+
+  if (!meta) {
+    if (!dbExists) {
+      return { isNewStore: true, salt: generateSalt().toString("hex") };
+    }
+
+    throw new IntegrityError("Metadata file (meta.json) is missing", "METADATA_MISSING");
+  }
+
+  if (!dbExists) {
+    throw new IntegrityError(`Database file (${CONSTANTS.DB_NAME}) is missing`, "DATABASE_MISSING");
+  }
+
+  return { isNewStore: false, meta, salt: meta.salt };
+}
+
+async function resolveExistingStoreMasterKey(
+  keyfile: Buffer,
+  meta: StoreMeta,
+  machineIdentity: ReturnType<typeof getMachineIdentityProfile>,
+  dbFilePath: string,
+  checkpoint: () => void,
+): Promise<{ masterKey: Buffer; machineBinding?: MachineBindingMeta }> {
+  const salt = Buffer.from(meta.salt, "hex");
+  let lastMismatch: IntegrityError | undefined;
+
+  for (const candidate of machineIdentity.candidates) {
+    const masterKey = deriveMasterKey(candidate, keyfile, salt);
+
     try {
-      const meta = JSON.parse(metaRaw) as { salt?: string };
-      if (meta.salt) {
-        return { salt: meta.salt, isNewStore: false };
+      await verifyIntegrity(masterKey, dbFilePath, meta, checkpoint);
+      return {
+        masterKey,
+        machineBinding:
+          candidate === machineIdentity.canonical
+            ? createMachineBinding(machineIdentity)
+            : meta.machineBinding,
+      };
+    } catch (error) {
+      if (error instanceof IntegrityError && error.subcode === "INTEGRITY_MISMATCH") {
+        lastMismatch = error;
+        continue;
       }
-    } catch {
-      // Corrupted meta.json — treat as new store
+
+      throw error;
     }
   }
 
-  const salt = generateSalt().toString("hex");
-  return { salt, isNewStore: true };
+  if (
+    meta.machineBinding?.strategy === CONSTANTS.MACHINE_BINDING_STRATEGY &&
+    meta.machineBinding.fingerprint !== machineIdentity.fingerprint
+  ) {
+    throw new IntegrityError(
+      "Machine identity changed and the store can no longer be unlocked. Use resetAtPath() or destroyAtPath() to recover.",
+      "MACHINE_IDENTITY_CHANGED",
+    );
+  }
+
+  throw lastMismatch ?? new IntegrityError();
+}
+
+function createMachineBinding(
+  machineIdentity: ReturnType<typeof getMachineIdentityProfile>,
+): MachineBindingMeta {
+  return {
+    strategy: machineIdentity.strategy,
+    fingerprint: machineIdentity.fingerprint,
+  };
+}
+
+async function cleanupFailedOpen(store: SecretStore): Promise<void> {
+  await closeStoreForCleanup(store);
+}
+
+async function closeStoreForCleanup(store: SecretStore): Promise<void> {
+  try {
+    store.checkpoint();
+  } catch {
+    // Preserve the original open/destroy error if cleanup checkpointing fails.
+  }
+
+  try {
+    store.close();
+  } catch {
+    // Preserve the original open/destroy error if close itself fails.
+  }
+
+  await waitForHandleRelease();
+}
+
+async function assertRecoveryTarget(
+  dirPath: string,
+  operation: "destroy" | "reset",
+): Promise<void> {
+  if (!(await pathExists(dirPath))) {
+    return;
+  }
+
+  const storeMarkers = await Promise.all([
+    pathExists(join(dirPath, CONSTANTS.KEYFILE_NAME)),
+    pathExists(join(dirPath, CONSTANTS.DB_NAME)),
+    pathExists(join(dirPath, CONSTANTS.META_NAME)),
+  ]);
+
+  const markerCount = storeMarkers.filter(Boolean).length;
+  if (markerCount >= 2) {
+    return;
+  }
+
+  throw new InitializationError(
+    `Refusing to ${operation} path \"${dirPath}\" because it does not look like a secrets-engine store`,
+  );
+}
+
+async function releaseDetachedStore(dirPath: string): Promise<void> {
+  const dbPath = join(dirPath, CONSTANTS.DB_NAME);
+  if (!(await pathExists(dbPath))) {
+    return;
+  }
+
+  let store: SecretStore;
+  try {
+    store = SecretStore.open(dirPath);
+  } catch {
+    return;
+  }
+
+  await closeStoreForCleanup(store);
+}
+
+async function waitForHandleRelease(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 150));
 }
 
 /**
- * Remove directory contents and the directory itself with retry logic.
- * More reliable than recursive `rm` on Windows where SQLite WAL files
- * may briefly retain OS-level handles after close.
+ * Remove directory contents and optionally the directory itself with retry logic.
+ * More reliable than recursive `rm` on Windows where SQLite WAL files may briefly
+ * retain OS-level handles after close.
  */
-async function removeDirectoryContents(dirPath: string): Promise<void> {
+async function removeDirectoryContents(dirPath: string, preserveDirectory = false): Promise<void> {
+  if (!(await pathExists(dirPath))) {
+    return;
+  }
+
   const maxRetries = 5;
   const retryDelay = 200;
 
@@ -405,9 +564,20 @@ async function removeDirectoryContents(dirPath: string): Promise<void> {
         }
       }
 
-      await rm(dirPath, { force: true, recursive: true });
+      if (!preserveDirectory) {
+        await rm(dirPath, { force: true, recursive: true });
+      }
+
       return;
     } catch (error: unknown) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return;
+      }
+
       const isRetryable =
         error instanceof Error &&
         "code" in error &&
@@ -420,5 +590,14 @@ async function removeDirectoryContents(dirPath: string): Promise<void> {
 
       await new Promise((resolve) => setTimeout(resolve, retryDelay * (attempt + 1)));
     }
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
   }
 }

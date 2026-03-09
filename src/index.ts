@@ -13,9 +13,10 @@ export {
   DecryptionError,
   InitializationError,
   IntegrityError,
+  type IntegrityErrorSubcode,
   KeyNotFoundError,
   SecretsEngineError,
   SecurityError,
 } from "./errors.ts";
 
-export type { OpenOptions, StorageLocation } from "./types.ts";
+export type { OpenOptions, ResetOptions, StorageLocation } from "./types.ts";

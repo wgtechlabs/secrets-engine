@@ -6,11 +6,13 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KeyNotFoundError, SecretsEngine } from "../src/index.ts";
+import { InitializationError, IntegrityError, KeyNotFoundError, SecretsEngine } from "../src/index.ts";
 import { CONSTANTS } from "../src/types.ts";
+import type { StoreMeta } from "../src/types.ts";
 
 let testDir: string;
 
@@ -33,6 +35,16 @@ function forceCheckpoint(dbPath: string): void {
   } finally {
     db.close();
   }
+}
+
+async function readMeta(dirPath: string): Promise<StoreMeta> {
+  return JSON.parse(await readFile(join(dirPath, CONSTANTS.META_NAME), "utf-8")) as StoreMeta;
+}
+
+async function writeMeta(dirPath: string, meta: StoreMeta | string): Promise<void> {
+  const metaPath = join(dirPath, CONSTANTS.META_NAME);
+  const content = typeof meta === "string" ? meta : JSON.stringify(meta, null, 2);
+  await writeFile(metaPath, content);
 }
 
 describe("SecretsEngine.open", () => {
@@ -100,6 +112,90 @@ describe("SecretsEngine.open", () => {
     const engine3 = await SecretsEngine.open({ path: testDir });
     expect(await engine3.get("test.key")).toBe("updated-value");
     await engine3.close();
+  });
+
+  test("throws METADATA_MISSING when an existing store loses meta.json", async () => {
+    const engine = await SecretsEngine.open({ path: testDir });
+    await engine.set("test.key", "test-value");
+    await engine.close();
+
+    await unlink(join(testDir, CONSTANTS.META_NAME));
+
+    await expect(SecretsEngine.open({ path: testDir })).rejects.toMatchObject({
+      code: "INTEGRITY_ERROR",
+      subcode: "METADATA_MISSING",
+    } satisfies Partial<IntegrityError>);
+  });
+
+  test("throws METADATA_CORRUPTED when meta.json is invalid", async () => {
+    const engine = await SecretsEngine.open({ path: testDir });
+    await engine.close();
+
+    await writeMeta(testDir, "{not-json");
+
+    await expect(SecretsEngine.open({ path: testDir })).rejects.toMatchObject({
+      code: "INTEGRITY_ERROR",
+      subcode: "METADATA_CORRUPTED",
+    } satisfies Partial<IntegrityError>);
+  });
+
+  test("throws UNSUPPORTED_VERSION when metadata version is not supported", async () => {
+    const engine = await SecretsEngine.open({ path: testDir });
+    await engine.close();
+
+    const meta = await readMeta(testDir);
+    await writeMeta(testDir, { ...meta, version: "999" });
+
+    await expect(SecretsEngine.open({ path: testDir })).rejects.toMatchObject({
+      code: "INTEGRITY_ERROR",
+      subcode: "UNSUPPORTED_VERSION",
+    } satisfies Partial<IntegrityError>);
+  });
+
+  test("throws INTEGRITY_MISMATCH when the stored HMAC does not match", async () => {
+    const engine = await SecretsEngine.open({ path: testDir });
+    await engine.set("test.key", "test-value");
+    await engine.close();
+
+    const meta = await readMeta(testDir);
+    await writeMeta(testDir, { ...meta, integrity: "0".repeat(meta.integrity.length) });
+
+    await expect(SecretsEngine.open({ path: testDir })).rejects.toMatchObject({
+      code: "INTEGRITY_ERROR",
+      subcode: "INTEGRITY_MISMATCH",
+    } satisfies Partial<IntegrityError>);
+  });
+
+  test("reopens a legacy store without machineBinding metadata", async () => {
+    const engine = await SecretsEngine.open({ path: testDir });
+    await engine.set("test.key", "test-value");
+    await engine.close();
+
+    const meta = await readMeta(testDir);
+    const { machineBinding: _machineBinding, ...legacyMeta } = meta;
+    await writeMeta(testDir, legacyMeta);
+
+    const reopened = await SecretsEngine.open({ path: testDir });
+    expect(await reopened.get("test.key")).toBe("test-value");
+    await reopened.close();
+  });
+
+  test("returns INTEGRITY_MISMATCH for legacy metadata without machineBinding", async () => {
+    const engine = await SecretsEngine.open({ path: testDir });
+    await engine.set("test.key", "test-value");
+    await engine.close();
+
+    const meta = await readMeta(testDir);
+    const { machineBinding: _machineBinding, ...legacyMeta } = meta;
+    await writeMeta(testDir, {
+      ...legacyMeta,
+      integrity: "0".repeat(legacyMeta.integrity.length),
+    });
+
+    await expect(SecretsEngine.open({ path: testDir })).rejects.toMatchObject({
+      code: "INTEGRITY_ERROR",
+      subcode: "INTEGRITY_MISMATCH",
+    } satisfies Partial<IntegrityError>);
   });
 });
 
@@ -294,8 +390,84 @@ describe("destroy", () => {
 
     await engine.destroy();
 
-    const { existsSync } = await import("node:fs");
     expect(existsSync(testDir)).toBe(false);
+  });
+});
+
+describe("recovery APIs", () => {
+  test("destroyAtPath refuses to delete a non-store directory", async () => {
+    const unrelatedFile = join(testDir, "notes.txt");
+    await writeFile(unrelatedFile, "keep me");
+
+    await expect(SecretsEngine.destroyAtPath({ path: testDir })).rejects.toThrow(
+      InitializationError,
+    );
+
+    expect(existsSync(unrelatedFile)).toBe(true);
+  });
+
+  test("resetAtPath refuses to delete a non-store directory", async () => {
+    const unrelatedFile = join(testDir, "notes.txt");
+    await writeFile(unrelatedFile, "keep me");
+
+    await expect(SecretsEngine.resetAtPath({ path: testDir })).rejects.toThrow(
+      InitializationError,
+    );
+
+    expect(existsSync(unrelatedFile)).toBe(true);
+  });
+
+  test("destroyAtPath removes a broken store after a failed open", async () => {
+    const engine = await SecretsEngine.open({ path: testDir });
+    await engine.set("key", "value");
+    await engine.close();
+
+    const meta = await readMeta(testDir);
+    await writeMeta(testDir, { ...meta, integrity: "0".repeat(meta.integrity.length) });
+
+    await expect(SecretsEngine.open({ path: testDir })).rejects.toMatchObject({
+      subcode: "INTEGRITY_MISMATCH",
+    } satisfies Partial<IntegrityError>);
+
+    await SecretsEngine.destroyAtPath({ path: testDir });
+
+    expect(existsSync(testDir)).toBe(false);
+  });
+
+  test("resetAtPath recreates an unreadable store as empty", async () => {
+    const engine = await SecretsEngine.open({ path: testDir });
+    await engine.set("key", "value");
+    await engine.close();
+
+    await writeMeta(testDir, "{not-json");
+
+    await expect(SecretsEngine.open({ path: testDir })).rejects.toMatchObject({
+      subcode: "METADATA_CORRUPTED",
+    } satisfies Partial<IntegrityError>);
+
+    const resetEngine = await SecretsEngine.resetAtPath({ path: testDir });
+
+    expect(resetEngine.size).toBe(0);
+    await resetEngine.set("fresh.key", "fresh-value");
+    expect(await resetEngine.get("fresh.key")).toBe("fresh-value");
+    await resetEngine.close();
+  });
+
+  test("failed open releases resources for immediate reset", async () => {
+    const engine = await SecretsEngine.open({ path: testDir });
+    await engine.set("key", "value");
+    await engine.close();
+
+    const meta = await readMeta(testDir);
+    await writeMeta(testDir, { ...meta, integrity: "0".repeat(meta.integrity.length) });
+
+    await expect(SecretsEngine.open({ path: testDir })).rejects.toMatchObject({
+      subcode: "INTEGRITY_MISMATCH",
+    } satisfies Partial<IntegrityError>);
+
+    const resetEngine = await SecretsEngine.resetAtPath({ path: testDir, preserveDirectory: true });
+    expect(resetEngine.size).toBe(0);
+    await resetEngine.close();
   });
 });
 

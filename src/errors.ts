@@ -32,11 +32,24 @@ export class SecurityError extends SecretsEngineError {
  * Thrown when the HMAC integrity check of the database fails.
  * Indicates possible tampering or corruption.
  */
+export type IntegrityErrorSubcode =
+  | "CHECKPOINT_FAILED"
+  | "METADATA_MISSING"
+  | "METADATA_CORRUPTED"
+  | "DATABASE_MISSING"
+  | "UNSUPPORTED_VERSION"
+  | "INTEGRITY_MISMATCH"
+  | "MACHINE_IDENTITY_CHANGED";
+
 export class IntegrityError extends SecretsEngineError {
   readonly code = "INTEGRITY_ERROR";
 
-  constructor(message = "Database integrity check failed — possible tampering detected") {
-    super(message);
+  constructor(
+    message = "Database integrity check failed — possible tampering detected",
+    readonly subcode: IntegrityErrorSubcode = "INTEGRITY_MISMATCH",
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
   }
 }
 

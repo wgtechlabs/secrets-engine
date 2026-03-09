@@ -31,4 +31,5 @@ store.db
 meta.json
 
 .vscode/*
+!.vscode/settings.json
 .contributerc.json
