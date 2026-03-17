@@ -194,7 +194,7 @@ async function openDatabase(dbPath: string): Promise<SQLiteDatabase> {
 }
 
 function isBunRuntime(): boolean {
-  return typeof Bun !== "undefined" || Boolean(process.versions?.bun);
+  return typeof globalThis.Bun !== "undefined" || Boolean(process.versions?.bun);
 }
 
 async function openBunDatabase(dbPath: string): Promise<SQLiteDatabase> {
