@@ -12,13 +12,16 @@ Keep your secrets truly secret. With encrypted names and values, zero friction, 
 - **Machine-bound** — Encryption keys are derived from machine identity + random keyfile via scrypt.
 - **Defense in depth** — Filesystem permission verification, HMAC integrity checks, per-entry unique IVs.
 - **Actionable recovery** — Static reset/destroy APIs recover unreadable stores without a successful `open()`.
-- **Bun-native** — Built on `bun:sqlite` and Node crypto. Zero external runtime dependencies.
+- **Bun-first, Node-compatible** — Prefers `bun:sqlite` on Bun and falls back to built-in `node:sqlite` on supported Node runtimes. Zero external runtime dependencies.
 
 ## Installation
 
 ```bash
 bun add @wgtechlabs/secrets-engine
+npm install @wgtechlabs/secrets-engine
 ```
+
+On Node, use a runtime with built-in `node:sqlite` support (Node 22.5+; some Node 22 releases may require enabling SQLite support explicitly). Bun remains the primary runtime and uses `bun:sqlite`.
 
 ## Quick Start
 
