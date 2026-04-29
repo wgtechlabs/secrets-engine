@@ -53,6 +53,22 @@ async function writeMeta(dirPath: string, meta: StoreMeta | string): Promise<voi
   await writeFile(metaPath, content);
 }
 
+function supportsNodeSqliteRuntime(): boolean {
+  const result = spawnSync(
+    "node",
+    [
+      "--input-type=module",
+      "-e",
+      "import('node:sqlite').then(() => process.exit(0)).catch(() => process.exit(1))",
+    ],
+    { encoding: "utf-8" },
+  );
+
+  return !result.error && result.status === 0;
+}
+
+const nodeSqliteRuntimeTest = supportsNodeSqliteRuntime() ? test : test.skip;
+
 describe("SecretsEngine.open", () => {
   test("creates a new store with no errors", async () => {
     const engine = await SecretsEngine.open({ path: testDir });
@@ -74,18 +90,20 @@ describe("SecretsEngine.open", () => {
     await engine2.close();
   });
 
-  test("supports a Node-targeted bundle without loading bun:sqlite on Node", async () => {
-    const consumerEntry = join(testDir, "consumer.ts");
-    const bundlePath = join(testDir, "dist", "consumer.js");
-    const nodeStorePath = join(testDir, "node-store");
-    const sourceImport = relative(testDir, join(process.cwd(), "src/index.ts")).replaceAll(
-      "\\",
-      "/",
-    );
+  nodeSqliteRuntimeTest(
+    "supports a Node-targeted bundle without loading bun:sqlite on Node",
+    async () => {
+      const consumerEntry = join(testDir, "consumer.ts");
+      const bundlePath = join(testDir, "dist", "consumer.js");
+      const nodeStorePath = join(testDir, "node-store");
+      const sourceImport = relative(testDir, join(process.cwd(), "src/index.ts")).replaceAll(
+        "\\",
+        "/",
+      );
 
-    await writeFile(
-      consumerEntry,
-      `
+      await writeFile(
+        consumerEntry,
+        `
         import { SecretsEngine } from ${JSON.stringify(sourceImport)};
 
         const secrets = await SecretsEngine.open({ path: ${JSON.stringify(nodeStorePath)} });
@@ -93,24 +111,25 @@ describe("SecretsEngine.open", () => {
         console.log(await secrets.get("cli.version"));
         await secrets.close();
       `,
-    );
+      );
 
-    const buildResult = await Bun.build({
-      entrypoints: [consumerEntry],
-      outfile: bundlePath,
-      target: "node",
-    });
+      const buildResult = await Bun.build({
+        entrypoints: [consumerEntry],
+        outfile: bundlePath,
+        target: "node",
+      });
 
-    expect(buildResult.success).toBe(true);
+      expect(buildResult.success).toBe(true);
 
-    const result = spawnSync("node", [bundlePath], {
-      encoding: "utf-8",
-    });
+      const result = spawnSync("node", [bundlePath], {
+        encoding: "utf-8",
+      });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("ERR_UNSUPPORTED_ESM_URL_SCHEME");
-    expect(result.stdout.trim()).toBe("1.0.0");
-  });
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain("ERR_UNSUPPORTED_ESM_URL_SCHEME");
+      expect(result.stdout.trim()).toBe("1.0.0");
+    },
+  );
 
   test("preserves secrets across reopens", async () => {
     const engine1 = await SecretsEngine.open({ path: testDir });
