@@ -1,6 +1,6 @@
 # @wgtechlabs/secrets-engine
 
-[![banner](https://ghrb.waren.build/banner?header=Secrets+Engine+%F0%9F%94%90&subheader=Defense-in-depth+encrypted+secret+storage+SDK+for+TypeScript&bg=013B84-016EEA&color=FFFFFF)](https://github.com/wgtechlabs/secrets-engine)
+[![Secrets Engine – GitHub Repo Banner](https://ghrb.waren.build/banner?header=Secrets+Engine+%F0%9F%94%90&subheader=Defense-in-depth+encrypted+secret+storage+SDK+for+TypeScript&bg=013B84-016EEA&color=FFFFFF)](https://github.com/wgtechlabs/secrets-engine)
 <!-- Created with GitHub Repo Banner by Waren Gonzaga: https://ghrb.waren.build -->
 
 Keep your secrets truly secret. With encrypted names and values, zero friction, and strict security by default, secrets‑engine gives developers defense‑in‑depth without the hassle. It’s a TypeScript SDK for secure secret storage, powered by machine‑bound AES‑256‑GCM and hardened SQLite.
