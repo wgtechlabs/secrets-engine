@@ -1,15 +1,28 @@
 /**
- * SQLite storage layer — wraps `bun:sqlite` with the encrypted secrets schema.
+ * SQLite storage layer — prefers `bun:sqlite` on Bun and falls back to
+ * `node:sqlite` on Node with the encrypted secrets schema.
  *
  * This module owns all database I/O. No SQL escapes this file.
  */
 
-import { Database } from "bun:sqlite";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { InitializationError } from "./errors.ts";
 import { CONSTANTS } from "./types.ts";
 import type { EncryptedEntry } from "./types.ts";
+
+interface SQLiteStatement {
+  run(...params: unknown[]): { changes: number };
+  get(...params: unknown[]): unknown;
+  all(...params: unknown[]): unknown[];
+}
+
+interface SQLiteDatabase {
+  readonly filename: string;
+  exec(sql: string): void;
+  prepare(sql: string): SQLiteStatement;
+  close(): void;
+}
 
 // ---------------------------------------------------------------------------
 // Schema DDL
@@ -40,13 +53,14 @@ const CREATE_META_TABLE = `
 /**
  * Low-level SQLite store for encrypted secret entries.
  *
- * All methods are synchronous because `bun:sqlite` is synchronous.
+ * All methods are synchronous because both supported SQLite runtimes expose
+ * synchronous database APIs.
  * The higher-level SecretsEngine wraps these with async semantics where needed.
  */
 export class SecretStore {
-  private readonly db: Database;
+  private readonly db: SQLiteDatabase;
 
-  private constructor(db: Database) {
+  private constructor(db: SQLiteDatabase) {
     this.db = db;
   }
 
@@ -54,11 +68,11 @@ export class SecretStore {
    * Open (or create) the SQLite database at the given directory.
    * Enables WAL mode and initializes the schema.
    */
-  static open(dirPath: string): SecretStore {
+  static async open(dirPath: string): Promise<SecretStore> {
     const dbPath = join(dirPath, CONSTANTS.DB_NAME);
 
     try {
-      const db = new Database(dbPath, { create: true });
+      const db = await openDatabase(dbPath);
 
       db.exec("PRAGMA journal_mode = WAL;");
       db.exec("PRAGMA foreign_keys = ON;");
@@ -169,4 +183,75 @@ export class SecretStore {
   close(): void {
     this.db.close();
   }
+}
+
+async function openDatabase(dbPath: string): Promise<SQLiteDatabase> {
+  if (isBunRuntime()) {
+    return await openBunDatabase(dbPath);
+  }
+
+  return await openNodeDatabase(dbPath);
+}
+
+function isBunRuntime(): boolean {
+  return typeof globalThis.Bun !== "undefined" || Boolean(process.versions?.bun);
+}
+
+async function openBunDatabase(dbPath: string): Promise<SQLiteDatabase> {
+  const { Database } = (await import(getBunSqliteSpecifier())) as {
+    Database: new (
+      filename: string,
+      options?: {
+        create?: boolean;
+      },
+    ) => SQLiteDatabase;
+  };
+
+  return new Database(dbPath, { create: true });
+}
+
+async function openNodeDatabase(dbPath: string): Promise<SQLiteDatabase> {
+  try {
+    const { DatabaseSync } = (await import(getNodeSqliteSpecifier())) as {
+      DatabaseSync: new (
+        filename: string,
+        options?: {
+          open?: boolean;
+        },
+      ) => {
+        exec(sql: string): void;
+        prepare(sql: string): SQLiteStatement;
+        close(): void;
+        location(): string | null;
+      };
+    };
+
+    const db = new DatabaseSync(dbPath, { open: true });
+
+    return {
+      filename: db.location() ?? dbPath,
+      exec(sql: string): void {
+        db.exec(sql);
+      },
+      prepare(sql: string): SQLiteStatement {
+        return db.prepare(sql);
+      },
+      close(): void {
+        db.close();
+      },
+    };
+  } catch (error) {
+    throw new Error(
+      "Node runtime requires built-in node:sqlite support (Node >= 22.5, or a newer Node release with sqlite enabled).",
+      { cause: error },
+    );
+  }
+}
+
+function getBunSqliteSpecifier(): string {
+  return ["bun", "sqlite"].join(":");
+}
+
+function getNodeSqliteSpecifier(): string {
+  return ["node", "sqlite"].join(":");
 }

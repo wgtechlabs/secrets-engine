@@ -11,7 +11,12 @@
 import { access, readdir, rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { decrypt, deriveMasterKey, encrypt, generateSalt, hmac } from "./crypto.ts";
-import { DecryptionError, InitializationError, IntegrityError, KeyNotFoundError } from "./errors.ts";
+import {
+  DecryptionError,
+  InitializationError,
+  IntegrityError,
+  KeyNotFoundError,
+} from "./errors.ts";
 import { filterKeys } from "./glob.ts";
 import { readStoreMeta, updateIntegrity, verifyIntegrity } from "./integrity.ts";
 import {
@@ -106,7 +111,7 @@ export class SecretsEngine {
     const machineIdentity = getMachineIdentityProfile();
 
     // 4. Open SQLite database
-    const store = SecretStore.open(dirPath);
+    const store = await SecretStore.open(dirPath);
 
     try {
       const { masterKey, machineBinding } = storeState.isNewStore
@@ -526,7 +531,7 @@ async function releaseDetachedStore(dirPath: string): Promise<void> {
 
   let store: SecretStore;
   try {
-    store = SecretStore.open(dirPath);
+    store = await SecretStore.open(dirPath);
   } catch {
     return;
   }

@@ -1,7 +1,7 @@
 {
   "name": "@wgtechlabs/secrets-engine",
   "version": "2.0.0",
-  "description": "Bun-first TypeScript SDK for securely storing and managing secrets with zero-friction, machine-bound AES-256-GCM encryption.",
+  "description": "Bun-first, Node-compatible TypeScript SDK for securely storing and managing secrets with zero-friction, machine-bound AES-256-GCM encryption.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -17,7 +17,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "build": "bun build ./src/index.ts --outdir ./dist --target node",
     "build:types": "bun x tsc --emitDeclarationOnly --declaration --outDir dist",
     "prepublishOnly": "bun run build && bun run build:types",
     "test": "bun test",
@@ -46,7 +46,8 @@
     "url": "https://github.com/wgtechlabs/secrets-engine.git"
   },
   "engines": {
-    "bun": ">=1.0.0"
+    "bun": ">=1.0.0",
+    "node": ">=22.5.0"
   },
   "publishConfig": {
     "access": "public"
