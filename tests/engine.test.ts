@@ -94,7 +94,7 @@ describe("SecretsEngine.open", () => {
     "supports a Node-targeted bundle without loading bun:sqlite on Node",
     async () => {
       const consumerEntry = join(testDir, "consumer.ts");
-      const bundlePath = join(testDir, "dist", "consumer.js");
+      const bundlePath = join(testDir, "dist", "consumer.mjs");
       const nodeStorePath = join(testDir, "node-store");
       const sourceImport = relative(testDir, join(process.cwd(), "src/index.ts")).replaceAll(
         "\\",
